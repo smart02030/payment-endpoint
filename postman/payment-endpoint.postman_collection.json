@@ -1,0 +1,673 @@
+{
+  "info": {
+    "name": "Payment Endpoint",
+    "description": "Requests for POST /carts/{cart_id}/payments with automatic checks.\n\nBefore each run, reset the database:\n\n    python scripts/reset_demo_db.py\n\nThen start the app (flask --app wsgi run) and use Run collection. Requests depend on each other, so run them in order.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Service",
+      "item": [
+        {
+          "name": "Health check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"database ok\", () => pm.expect(pm.response.json().database).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "App is up and connected to PostgreSQL."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Happy path & idempotency (Alice)",
+      "item": [
+        {
+          "name": "Alice pays her cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", () => pm.response.to.have.status(201));",
+                  "const p = pm.response.json();",
+                  "pm.test(\"payment succeeded\", () => pm.expect(p.status).to.eql(\"succeeded\"));",
+                  "pm.test(\"amount is 70.00 USD\", () => { pm.expect(p.amount).to.eql(\"70.00\"); pm.expect(p.currency).to.eql(\"USD\"); });",
+                  "pm.test(\"provider payment id set\", () => pm.expect(p.provider_payment_id).to.match(/^mock_ch_/));",
+                  "pm.collectionVariables.set(\"alicePaymentId\", p.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{aliceUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-alice-1"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{aliceCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{aliceCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Charges Alice's default card for her cart: 1 x 45.00 + 2 x 12.50 = 70.00 USD."
+          }
+        },
+        {
+          "name": "Alice repeats the same request (retry)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"same payment returned\", () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"alicePaymentId\")));",
+                  "pm.test(\"marked as replayed\", () => pm.expect(pm.response.headers.get(\"Idempotent-Replayed\")).to.eql(\"true\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{aliceUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-alice-1"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{aliceCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{aliceCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Same Idempotency-Key as before, e.g. a network retry. Must return the first payment, not charge again."
+          }
+        },
+        {
+          "name": "Alice pays again with a new key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"error code is cart_not_active\", () => pm.expect(pm.response.json().error.code).to.eql(\"cart_not_active\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{aliceUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-alice-2"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{aliceCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{aliceCartId}}",
+                "payments"
+              ]
+            },
+            "description": "A different Idempotency-Key is a new attempt, but the cart is already paid."
+          }
+        },
+        {
+          "name": "Alice reads her payment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"payment is succeeded\", () => pm.expect(pm.response.json().status).to.eql(\"succeeded\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{aliceUserId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{alicePaymentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{alicePaymentId}}"
+              ]
+            },
+            "description": "Read the payment back."
+          }
+        },
+        {
+          "name": "Bob tries to read Alice's payment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{bobUserId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payments/{{alicePaymentId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "{{alicePaymentId}}"
+              ]
+            },
+            "description": "Payments are only visible to their owner."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Declined card (Bob)",
+      "item": [
+        {
+          "name": "Bob tries to use Carol's card",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 422\", () => pm.response.to.have.status(422));",
+                  "pm.test(\"error code is payment_method_not_found\", () => pm.expect(pm.response.json().error.code).to.eql(\"payment_method_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{bobUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-bob-0"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{bobCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{bobCartId}}",
+                "payments"
+              ]
+            },
+            "description": "A payment method that belongs to another user is rejected before any charge.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payment_method_id\": \"{{carolCardId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Bob pays with his default card (declined)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 402\", () => pm.response.to.have.status(402));",
+                  "const p = pm.response.json();",
+                  "pm.test(\"payment failed\", () => pm.expect(p.status).to.eql(\"failed\"));",
+                  "pm.test(\"failure code card_declined\", () => pm.expect(p.failure_code).to.eql(\"card_declined\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{bobUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-bob-1"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{bobCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{bobCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Bob's default card token makes the mock provider decline. The cart stays active."
+          }
+        },
+        {
+          "name": "Bob pays with his other card",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 201\", () => pm.response.to.have.status(201));",
+                  "const p = pm.response.json();",
+                  "pm.test(\"payment succeeded\", () => pm.expect(p.status).to.eql(\"succeeded\"));",
+                  "pm.test(\"amount is 89.99\", () => pm.expect(p.amount).to.eql(\"89.99\"));",
+                  "pm.test(\"used the Mastercard\", () => pm.expect(p.payment_method_id).to.eql(pm.collectionVariables.get(\"bobSecondCardId\")));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{bobUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-bob-2"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{bobCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{bobCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Retry with an explicit payment_method_id (Bob's Mastercard). Succeeds: 89.99 USD.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payment_method_id\": \"{{bobSecondCardId}}\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Provider timeout (Carol)",
+      "item": [
+        {
+          "name": "Carol pays; provider times out",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 502\", () => pm.response.to.have.status(502));",
+                  "pm.test(\"payment is pending\", () => pm.expect(pm.response.json().status).to.eql(\"pending\"));",
+                  "pm.collectionVariables.set(\"carolPaymentId\", pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{carolUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-carol-1"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{carolCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{carolCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Carol's card makes the mock provider time out. We cannot know if she was charged, so the payment stays pending (502) instead of failed."
+          }
+        },
+        {
+          "name": "Carol tries a new key while unresolved",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"error code is payment_in_progress\", () => pm.expect(pm.response.json().error.code).to.eql(\"payment_in_progress\"));",
+                  "pm.test(\"points to the pending payment\", () => pm.expect(pm.response.json().error.payment_id).to.eql(pm.collectionVariables.get(\"carolPaymentId\")));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{carolUserId}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "postman-carol-2"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{carolCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{carolCartId}}",
+                "payments"
+              ]
+            },
+            "description": "A second attempt must not start while the first one's outcome is unknown."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Access & validation",
+      "item": [
+        {
+          "name": "Bob tries to pay Alice's cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error code is cart_not_found\", () => pm.expect(pm.response.json().error.code).to.eql(\"cart_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{bobUserId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{aliceCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{aliceCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Another user's cart looks like it does not exist."
+          }
+        },
+        {
+          "name": "Missing X-User-Id header",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"error code is unauthenticated\", () => pm.expect(pm.response.json().error.code).to.eql(\"unauthenticated\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{aliceCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{aliceCartId}}",
+                "payments"
+              ]
+            },
+            "description": "No authenticated user."
+          }
+        },
+        {
+          "name": "Invalid payment_method_id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 400\", () => pm.response.to.have.status(400));",
+                  "pm.test(\"error code is invalid_body\", () => pm.expect(pm.response.json().error.code).to.eql(\"invalid_body\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{carolUserId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/{{carolCartId}}/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "{{carolCartId}}",
+                "payments"
+              ]
+            },
+            "description": "Body field is not a UUID.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payment_method_id\": \"not-a-uuid\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Unknown cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 404\", () => pm.response.to.have.status(404));",
+                  "pm.test(\"error code is cart_not_found\", () => pm.expect(pm.response.json().error.code).to.eql(\"cart_not_found\"));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{aliceUserId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/carts/00000000-0000-0000-0000-000000000000/payments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "carts",
+                "00000000-0000-0000-0000-000000000000",
+                "payments"
+              ]
+            },
+            "description": "Cart does not exist."
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "aliceUserId",
+      "value": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "key": "bobUserId",
+      "value": "22222222-2222-2222-2222-222222222222"
+    },
+    {
+      "key": "carolUserId",
+      "value": "33333333-3333-3333-3333-333333333333"
+    },
+    {
+      "key": "aliceCartId",
+      "value": "c1c1c1c1-c1c1-c1c1-c1c1-c1c1c1c1c1c1"
+    },
+    {
+      "key": "bobCartId",
+      "value": "b0b0b0b0-b0b0-b0b0-b0b0-b0b0b0b0b0b0"
+    },
+    {
+      "key": "carolCartId",
+      "value": "ca1ca1ca-ca1c-a1ca-1ca1-ca1ca1ca1ca1"
+    },
+    {
+      "key": "bobSecondCardId",
+      "value": "b0b00000-0000-0000-0000-000000000002"
+    },
+    {
+      "key": "carolCardId",
+      "value": "ca100000-0000-0000-0000-000000000001"
+    },
+    {
+      "key": "alicePaymentId",
+      "value": ""
+    },
+    {
+      "key": "carolPaymentId",
+      "value": ""
+    }
+  ]
+}
